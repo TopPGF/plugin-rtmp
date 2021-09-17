@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Monibuca/engine/v3"
+	GB28181 "github.com/Monibuca/plugin-gb28181/v3"
 	"github.com/Monibuca/utils/v3"
 )
 
@@ -104,6 +105,7 @@ func processRtmp(conn net.Conn) {
 					pm := msg.MsgData.(*PublishMessage)
 					streamPath := nc.appName + "/" + strings.Split(pm.PublishingName, "?")[0]
 					stream = &engine.Stream{Type: "RTMP", StreamPath: streamPath}
+					log.Println("publishStream:", stream)
 					if stream.Publish() {
 						absTs := make(map[uint32]uint32)
 						vt := stream.NewVideoTrack(0)
@@ -137,11 +139,14 @@ func processRtmp(conn net.Conn) {
 					}
 				case "play":
 					pm := msg.MsgData.(*PlayMessage)
-					streamPath := nc.appName + "/" + strings.Split(pm.StreamName, "?")[0]
+					channelID := strings.Split(pm.StreamName, "?")[0]
+					streamPath := nc.appName + "/" + channelID
+					log.Println("playStream:", streamPath)
+					CreateGB28181Stream(nc.appName, channelID)
 					nc.writeChunkSize = config.ChunkSize
 					subscriber := engine.Subscriber{
-						Type:             "RTMP",
-						ID:               fmt.Sprintf("%s|%d", conn.RemoteAddr().String(), nc.streamID),
+						Type: "RTMP",
+						ID:   fmt.Sprintf("%s|%d", conn.RemoteAddr().String(), nc.streamID),
 					}
 					if err = subscriber.Subscribe(streamPath); err == nil {
 						streams[nc.streamID] = &subscriber
@@ -164,9 +169,9 @@ func processRtmp(conn net.Conn) {
 								return
 							}
 							err = nc.SendMessage(SEND_FULL_VDIEO_MESSAGE, &AVPack{Payload: vt.ExtraData.Payload})
-							subscriber.OnVideo = func(ts uint32,pack *engine.VideoPack) {
+							subscriber.OnVideo = func(ts uint32, pack *engine.VideoPack) {
 								err = nc.SendMessage(SEND_FULL_VDIEO_MESSAGE, &AVPack{Timestamp: 0, Payload: pack.Payload})
-								subscriber.OnVideo = func(ts uint32,pack *engine.VideoPack) {
+								subscriber.OnVideo = func(ts uint32, pack *engine.VideoPack) {
 									err = nc.SendMessage(SEND_VIDEO_MESSAGE, &AVPack{Timestamp: getDeltaTime(ts), Payload: pack.Payload})
 								}
 							}
@@ -183,14 +188,14 @@ func processRtmp(conn net.Conn) {
 								}
 								return
 							}
-							subscriber.OnAudio = func(ts uint32,pack *engine.AudioPack) {
+							subscriber.OnAudio = func(ts uint32, pack *engine.AudioPack) {
 								if at.CodecID == 10 {
 									err = nc.SendMessage(SEND_FULL_AUDIO_MESSAGE, &AVPack{Payload: at.ExtraData})
 								}
-								subscriber.OnAudio = func(ts uint32,pack *engine.AudioPack) {
+								subscriber.OnAudio = func(ts uint32, pack *engine.AudioPack) {
 									err = nc.SendMessage(SEND_AUDIO_MESSAGE, &AVPack{Timestamp: getDeltaTime(ts), Payload: pack.Payload})
 								}
-								subscriber.OnAudio(ts,pack)
+								subscriber.OnAudio(ts, pack)
 							}
 						}
 						go subscriber.Play(at, vt)
@@ -222,6 +227,17 @@ func processRtmp(conn net.Conn) {
 			msg.Recycle()
 		} else {
 			return
+		}
+	}
+}
+
+//CreateGB28181Stream 检查GB28181流是否存在,不存在创建
+func CreateGB28181Stream(ID string, channelID string) {
+	if c := GB28181.FindChannel(ID, channelID); c != nil {
+		log.Println("GB28181 Channel isSet", ID, channelID)
+		if c.LivePublisher == nil {
+			log.Println("Create GB28181 Stream", ID, channelID)
+			c.Invite("", "")
 		}
 	}
 }
